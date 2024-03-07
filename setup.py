@@ -16,7 +16,6 @@ setup(
     'artificial intelligence'
   ],
   install_requires=[
-    'einops>=0.6.0',
     'torch'
   ],
   classifiers=[

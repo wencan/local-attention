@@ -2,8 +2,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from einops import rearrange
-
 from local_attention.local_attention import LocalAttention
 
 # helper function
@@ -96,7 +94,7 @@ class LocalMHA(nn.Module):
             x = self.norm(x)
 
         q, k, v = self.to_qkv(x).chunk(3, dim = -1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), (q, k, v)) 
+        q, k, v = map(lambda t: t.unflatten(-1, (self.heads, -1)).transpose(1, 2), (q, k, v))
 
         if self.qk_rmsnorm:
             q, k = map(l2norm, (q, k))
@@ -107,10 +105,11 @@ class LocalMHA(nn.Module):
 
         if exists(self.to_v_gate):
             gates = self.to_v_gate(x)
-            gates = rearrange(gates, 'b n h -> b h n 1')
+            gates = gates.tranpose(1, 2).unsqueeze(-1)
+
             out = out * gates.sigmoid()
 
-        out = rearrange(out, 'b h n d -> b n (h d)')
+        out = out.transpose(1, 2).flatten(2, 3)
         return self.to_out(out)
 
 # feedforward
@@ -157,14 +156,15 @@ class DynamicPositionBias(nn.Module):
         assert j >= i
 
         rel_dist = torch.arange(j, dtype = torch.float, device = device)
-        bias = self.mlp(rearrange(rel_dist, '... -> ... 1'))
+        bias = self.mlp(rel_dist.unsqueeze(-1))
 
         i_seq = torch.arange(j - i, j, device = device)
         j_seq = torch.arange(j, device = device)
 
-        rel_dist_indices = (rearrange(i_seq, 'i -> i 1') - rearrange(j_seq, 'j -> 1 j')).abs()
+        rel_dist_indices = (i_seq.unsqueeze(-1) - j_seq.unsqueeze(-2)).abs()
 
-        bias = rearrange(bias[rel_dist_indices], 'i j h -> h i j')
+        bias = torch.permute(bias[rel_dist_indices], (2, 0, 1))
+
         return bias
 
 # main transformer class
@@ -265,6 +265,6 @@ class LocalTransformer(nn.Module):
         if not return_loss:
             return logits
 
-        logits = rearrange(logits, 'b n c -> b c n')
+        logits = logits.transpose(1, 2)
         loss = F.cross_entropy(logits, labels, ignore_index = self.ignore_index)
         return loss
